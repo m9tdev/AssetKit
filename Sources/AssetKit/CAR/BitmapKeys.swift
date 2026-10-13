@@ -16,6 +16,38 @@ import Foundation
 /// resolve correctly. SpringBoard's appicon-render path does NOT depend on
 /// BITMAPKEYS (the home icon still renders via the loose-PNG fallback).
 enum BitmapKeys {
+    /// The classic macOS descriptor (actool 27.0 macosx oracles): a header
+    /// [1, 0, (n + 1) * 4, n], then one u32 per KEYFORMAT attribute. The
+    /// attributes that name the asset (appearance, element, part, identifier)
+    /// are -1; every other column is the bit mask of the values the facet's
+    /// rendition keys use, OR of (1 << value). Examples from Apple's cars:
+    /// scale 1x = 2, 1x + 2x = 6; an Icon Composer icon's dimension2 (Icon
+    /// Index 0 to 7) = 255, a mac appiconset's (0 to 5) = 63, a symbol's
+    /// (0 to 2) = 7; display gamut sRGB + P3 = 3; a symbol's deployment
+    /// target 5 = 0x20, glyph weight 4 = 0x10, glyph size 2 = 4. Every facet
+    /// gets a row, colors included.
+    static func classicMacDescriptor(keys: [RenditionKey], keyFormat: [AttributeID]) -> Data {
+        var w = ByteWriter()
+        w.writeLE(UInt32(1))
+        w.writeLE(UInt32(0))
+        w.writeLE(UInt32((keyFormat.count + 1) * 4))
+        w.writeLE(UInt32(keyFormat.count))
+        for attribute in keyFormat {
+            switch attribute {
+            case .appearance, .element, .part, .identifier:
+                w.writeLE(UInt32(0xFFFFFFFF))
+            default:
+                // Values above 31 do not fit a u32 mask; none occur in practice.
+                let mask = keys.reduce(UInt32(0)) { mask, key in
+                    let value = key.value(of: attribute)
+                    return value < 32 ? mask | (UInt32(1) << UInt32(value)) : mask
+                }
+                w.writeLE(mask == 0 ? UInt32(1) : mask)
+            }
+        }
+        return w.data
+    }
+
     /// The descriptor. Layout was derived by diffing actool's outputs
     /// for `.appiconset` vs `.imageset` (bitmap) vs `.imageset` (vector)
     /// renditions. The first 7 u32s are header-like; only slot 6 varies
