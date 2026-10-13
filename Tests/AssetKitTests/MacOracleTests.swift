@@ -8,9 +8,7 @@ import Testing
 /// genoracle.py; Apple's binaries are not in the repo).
 ///
 /// Known gaps, allowed here and nowhere else: Apple's packed atlases
-/// (element 9, and the Dimension1 key slot a second atlas adds) and the
-/// extra Icon Composer colors and gradients Apple writes (`_Assets/Color-n`,
-/// `_Assets/Gradient-n` beyond AssetKit's).
+/// (element 9, and the Dimension1 key slot a second atlas adds).
 @Suite("macOS output against actool 27.0")
 struct MacOracleTests {
     static let fixtures = Bundle.module.url(forResource: "MacOracle", withExtension: nil, subdirectory: "Fixtures")!
@@ -21,7 +19,7 @@ struct MacOracleTests {
     }
 
     static func isKnownGap(_ name: String) -> Bool {
-        name.isEmpty || name.range(of: #"_Assets/(Color|Gradient)-\d+$"#, options: .regularExpression) != nil
+        name.isEmpty
     }
 
     static var icon: IconComposerCompiler.Input {
@@ -111,6 +109,17 @@ struct MacOracleTests {
             .compile(catalog: Self.fixtures.appendingPathComponent("MacVariants.xcassets"),
                      appIconName: "Test", iconComposer: Self.icon)
         try check(result, against: "variants")
+    }
+
+    @Test("Background fill: none, clear, half-transparent", arguments: ["NoFill", "ClearFill", "HalfRed"])
+    func backgroundFill(name: String) async throws {
+        let catalog = try Self.emptyCatalog()
+        defer { try? FileManager.default.removeItem(at: catalog) }
+        let icon = IconComposerCompiler.Input(
+            name: name, directory: Self.fixtures.appendingPathComponent("\(name).icon"), idioms: ["mac"])
+        let result = try await XCAssetCompiler(deploymentTarget: "14.0", platform: "macosx")
+            .compile(catalog: catalog, appIconName: name, iconComposer: icon)
+        try check(result, against: name.lowercased())
     }
 
     @Test("mac appiconset with the icon as alternate")

@@ -60,6 +60,8 @@ public enum IconComposerCompiler {
         var scale: Double
         var translation: (Double, Double)
         var fills: [[String: Any]]
+        /// The fill came from a plain "fill" key, not fill-specializations.
+        var plainFill = false
         var blends: [[String: Any]]
         var opacities: [[String: Any]]
         var glass: Bool
@@ -108,6 +110,10 @@ public enum IconComposerCompiler {
                 if opacities.isEmpty, let opacity = layer["opacity"] {
                     opacities = [["value": opacity]]
                 }
+                var fills = layer["fill-specializations"] as? [[String: Any]] ?? []
+                if fills.isEmpty, let fill = layer["fill"] {
+                    fills = [["value": fill]]
+                }
                 var blends = layer["blend-mode-specializations"] as? [[String: Any]] ?? []
                 if let mode = layer["blend-mode"] as? String, !blends.contains(where: { $0["appearance"] == nil }) {
                     blends.insert(["value": mode], at: 0)
@@ -116,7 +122,8 @@ public enum IconComposerCompiler {
                     imageName: layer["image-name"] as? String ?? "",
                     scale: (position["scale"] as? NSNumber)?.doubleValue ?? 1,
                     translation: (translation.first ?? 0, translation.count > 1 ? translation[1] : 0),
-                    fills: layer["fill-specializations"] as? [[String: Any]] ?? [],
+                    fills: fills,
+                    plainFill: layer["fill-specializations"] == nil && layer["fill"] != nil,
                     blends: blends,
                     opacities: opacities,
                     glass: layer["glass"] as? Bool ?? true))
@@ -141,8 +148,11 @@ public enum IconComposerCompiler {
         }
         var fills = json["fill-specializations"] as? [[String: Any]] ?? []
         if fills.isEmpty, let fill = json["fill"] {
-            // A bare fill is the light background. Dark with no specialization is system-dark.
-            fills = [["value": fill], ["appearance": "dark", "value": "system-dark"]]
+            // A bare fill is the light background. Dark with no specialization is
+            // system-dark, except for a clear solid fill: actool keeps it clear in
+            // every appearance.
+            fills = isClear(fill) ? [["value": fill]]
+                : [["value": fill], ["appearance": "dark", "value": "system-dark"]]
         }
         return IconModel(fills: fills, groups: groups)
     }
@@ -186,6 +196,42 @@ public enum IconComposerCompiler {
         default:
             return nil
         }
+    }
+
+    /// Extended-gray white: Color-1 of every icon, and the light background
+    /// of an icon.json without any fill.
+    static let white = IconColor(colorSpaceID: 6, components: [1, 1])
+
+    /// A solid fill with alpha 0 (Icon Composer's clear background).
+    static func isClear(_ value: Any) -> Bool {
+        guard let solid = (value as? [String: Any])?["solid"] as? String,
+              let color = parseColor(solid) else { return false }
+        return color.components.last == 0
+    }
+
+    /// The background fill of one appearance (actool 27.0, macosx and
+    /// iphoneos oracles): the resolved fill; else system-dark in dark, white
+    /// for an icon.json without any fill, system-light for "automatic".
+    static func backgroundFill(_ model: IconModel, appearance: Appearance?) -> Fill {
+        if let fill = resolveFill(model.fills, appearance: appearance) { return fill }
+        if appearance == .dark { return presetFill("system-dark")! }
+        return model.fills.isEmpty ? .solid(white) : presetFill("system-light")!
+    }
+
+    /// A dark layer's fill when the dark background is automatic (not the
+    /// light one): a light-shaped layer without fill-specializations takes
+    /// the light background fill. A layer with a plain fill of its own takes
+    /// it too, opaque (half-transparent red background: Color-7, alpha 1).
+    /// nil: the layer keeps its own dark fill.
+    static func automaticDarkFill(_ model: IconModel, layer: Layer, lightShape: Bool) -> Fill? {
+        guard layer.fills.isEmpty || layer.plainFill, lightShape else { return nil }
+        let light = backgroundFill(model, appearance: nil)
+        guard backgroundFill(model, appearance: .dark) != light else { return nil }
+        if layer.plainFill, case .solid(var color) = light {
+            color.components[color.components.count - 1] = 1
+            return .solid(color)
+        }
+        return light
     }
 
     /// Resolves a fill for one appearance. "automatic" uses the unqualified
@@ -335,8 +381,8 @@ public enum IconComposerCompiler {
         // Color-1 is the extended-gray white. Backgrounds are allocated in
         // appearance order; a custom light fill is Gradient-1 and a layer
         // gradient after both backgrounds is Gradient-3.
-        var colors: [IconColor] = [IconColor(colorSpaceID: 6, components: [1, 1])]
-        var colorNames: [IconColor: String] = [:]
+        var colors: [IconColor] = [white]
+        var colorNames: [IconColor: String] = [white: "\(input.name)_Assets/Color-1"]
         func colorSlot(_ c: IconColor) -> String {
             if let known = colorNames[c] { return known }
             colors.append(c)
@@ -381,18 +427,15 @@ public enum IconComposerCompiler {
         // Backgrounds in appearance order, then layer fills. A custom light
         // fill is Gradient-1 and replaces system-light; a later layer gradient
         // is Gradient-3 because system-dark still occupies a slot.
-        func backgroundSlot(_ appearance: Appearance?) -> String {
-            if let fill = resolveFill(model.fills, appearance: appearance) {
-                if case .gradient(let top, let bottom) = fill {
-                    for preset in ["system-light", "system-dark"] {
-                        if case .gradient(let pt, let pb)? = presetFill(preset), pt == top, pb == bottom {
-                            return presetSlot(preset)
-                        }
-                    }
-                }
-                return fillSlot(fill)
+        // A fill equal to a preset gradient uses the preset's facet.
+        func namedFillSlot(_ fill: Fill) -> String {
+            for preset in ["system-light", "system-dark"] where fill == presetFill(preset) {
+                return presetSlot(preset)
             }
-            return presetSlot(appearance == .dark ? "system-dark" : "system-light")
+            return fillSlot(fill)
+        }
+        func backgroundSlot(_ appearance: Appearance?) -> String {
+            namedFillSlot(backgroundFill(model, appearance: appearance))
         }
         let backgroundNames = appearances.map { backgroundSlot($0) }
 
@@ -454,10 +497,9 @@ public enum IconComposerCompiler {
                     let image = images[layer.imageName]!
                     let rect = placedRect(image: image, layer: layer, group: group)
                     var name = fillName(layer, appearance)
-                    if name == nil, layer.fills.isEmpty, appearance == .dark,
-                       GlassRender.lightShape(image),
-                       let inherited = resolveFill(model.fills, appearance: nil) {
-                        name = fillSlot(inherited)
+                    if appearance == .dark, let inherited = automaticDarkFill(
+                        model, layer: layer, lightShape: GlassRender.lightShape(image)) {
+                        name = namedFillSlot(inherited)
                     }
                     return IconGroupLayer(
                         imageFacetName: "",
@@ -485,8 +527,10 @@ public enum IconComposerCompiler {
         var stackRenditions: [Rendition] = []
         for (appearance, backgroundName) in zip(appearances, backgroundNames) {
             let backgroundIdentifier = UInt16(FacetKeys.nameHash(backgroundName) & 0xFFFF)
+            // A solid background is a color facet (part 217), else a gradient (247).
+            let solid = if case .solid = backgroundFill(model, appearance: appearance) { true } else { false }
             var children = [IconStackChild(
-                part: 247, identifier: backgroundIdentifier,
+                part: solid ? RenditionKey.Part.color.rawValue : 247, identifier: backgroundIdentifier,
                 blurStrength: 0, translucency: 0, shadowStyle: 0, shadowOpacity: 0)]
             for groupFacet in groupFacets.reversed() {
                 children.append(IconStackChild(
