@@ -512,7 +512,7 @@ public enum IconComposerCompiler {
         let idioms = input.platform == "macosx" ? [] : input.idioms.map { Idiom(rawValue: $0) ?? .universal }
         var iconRenditions: [Rendition] = []
         var lightPixels: [UInt8] = []
-        for appearance in appearances {
+        for appearance in input.platform == "macosx" ? [] : appearances {
             let pixels = render(model: model, images: images, appearance: appearance)
             if appearance == nil { lightPixels = pixels }
             let renditionTag = renditionUUIDTag()
@@ -628,9 +628,16 @@ public enum IconComposerCompiler {
     static func compileMacIcons(
         input: Input, model: IconModel, images: [String: LoadedImage], otherRenditions: [Rendition]
     ) throws -> Result {
-        let light = render(model: model, images: images, appearance: nil)
-        let straight = straightRGBA(fromPremultipliedBGRA: light)
-        let tag = renditionUUIDTag()
+        let straight = macIconCanvas(
+            straightRGBA(fromPremultipliedBGRA: render(model: model, images: images, appearance: nil)))
+        let light = premultipliedBGRA(fromStraightRGBA: straight)
+        var downsampled: [Int: [PNG.RGBA<UInt8>]] = [:]
+        func pixels(side: Int) -> [PNG.RGBA<UInt8>] {
+            if let cached = downsampled[side] { return cached }
+            let result = downsampleRGBA(straight, from: canvasSide, to: side)
+            downsampled[side] = result
+            return result
+        }
         let sizes: [(points: Int, scale: Scale)] = [
             (16, .x2), (32, .x2), (64, .x2), (128, .x2), (256, .x2), (512, .x2), (1024, .x1),
         ]
@@ -638,17 +645,16 @@ public enum IconComposerCompiler {
         var sizeEntries: [MultiSizedBody.Size] = []
         for (index, size) in sizes.enumerated() {
             let side = size.points * size.scale.factor
-            let pixels = side == canvasSide ? light
-                : premultipliedBGRA(fromStraightRGBA: downsampleRGBA(straight, from: canvasSide, to: side))
+            let bitmap = side == canvasSide ? light : premultipliedBGRA(fromStraightRGBA: pixels(side: side))
             icons.append(Rendition(
                 name: input.name, idiom: .universal, scale: size.scale,
                 appearance: nil,
                 iconComposerSource: true, iconIndex: UInt16(index + 1),
                 body: .bitmap(BitmapBody(
                     width: UInt32(side), height: UInt32(side),
-                    pixelsBGRA: pixels, colorSpaceID: 1, kind: .appIcon,
+                    pixelsBGRA: bitmap, colorSpaceID: 1, kind: .appIcon,
                     renditionName:
-                        "\(input.name)\(size.points)x\(size.points)_NSAppearanceNameSystem_\(tag).png"))))
+                        "\(input.name)\(size.points)x\(size.points)_NSAppearanceNameSystem_\(renditionUUIDTag()).png"))))
             sizeEntries.append(.init(
                 pointWidth: UInt32(size.points), pointHeight: UInt32(size.points), iconIndex: UInt32(index + 1)))
         }
@@ -658,7 +664,7 @@ public enum IconComposerCompiler {
 
         var pngs: [Int: Data] = [:]
         for side in [16, 32, 128, 256] {
-            pngs[side] = try pngData(downsampleRGBA(straight, from: canvasSide, to: side), side: side)
+            pngs[side] = try pngData(pixels(side: side), side: side)
         }
         let bundle = AppIconBundle(
             primaryIconName: input.name,
@@ -670,6 +676,89 @@ public enum IconComposerCompiler {
                 name: "\(input.name).icns",
                 data: try IcnsWriter.write(iconName: input.name, pngs: pngs))])
         return Result(renditions: otherRenditions + icons + [multiSized], appIconBundle: bundle)
+    }
+
+    /// The macOS app icon on its 1024 px canvas, from the full-bleed design
+    /// render: the design scaled to an 824 px body at (100, 100), a rounded
+    /// rectangle with 186 px corners, over a black drop shadow (Gaussian,
+    /// sigma 16, 8 px down, opacity 0.248). Fitted to actool 27.0's flat
+    /// 1024 px icon: the body edge matches to under half a pixel on
+    /// average. macOS before 26 draws these flat images as they are.
+    static func macIconCanvas(_ design: [PNG.RGBA<UInt8>]) -> [PNG.RGBA<UInt8>] {
+        let n = canvasSide, origin = 100, side = 824, radius = 186.0
+        let body = downsampleRGBA(design, from: n, to: side)
+
+        // Body coverage, 4x4 supersampled.
+        var coverage = [Float](repeating: 0, count: side * side)
+        let half = Double(side) / 2, inner = half - radius
+        for y in 0..<side {
+            for x in 0..<side {
+                var hits = 0
+                for sy in 0..<4 {
+                    for sx in 0..<4 {
+                        let px = abs(Double(x) + (Double(sx) + 0.5) / 4 - half) - inner
+                        let py = abs(Double(y) + (Double(sy) + 0.5) / 4 - half) - inner
+                        let qx = max(px, 0), qy = max(py, 0)
+                        if qx * qx + qy * qy <= radius * radius { hits += 1 }
+                    }
+                }
+                coverage[y * side + x] = Float(hits) / 16
+            }
+        }
+
+        // Shadow: the coverage 8 px lower, blurred (separable Gaussian).
+        var shadow = [Float](repeating: 0, count: n * n)
+        for y in 0..<side {
+            for x in 0..<side {
+                shadow[(y + origin + 8) * n + x + origin] = coverage[y * side + x]
+            }
+        }
+        let sigma: Float = 16, reach = 48
+        let kernel = (-reach...reach).map { exp(-Float($0 * $0) / (2 * sigma * sigma)) }
+        let total = kernel.reduce(0, +)
+        let weights = kernel.map { $0 / total }
+        var pass = [Float](repeating: 0, count: n * n)
+        for y in 0..<n {
+            for x in 0..<n {
+                var sum: Float = 0
+                for k in -reach...reach where x + k >= 0 && x + k < n {
+                    sum += shadow[y * n + x + k] * weights[k + reach]
+                }
+                pass[y * n + x] = sum
+            }
+        }
+        for y in 0..<n {
+            for x in 0..<n {
+                var sum: Float = 0
+                for k in -reach...reach where y + k >= 0 && y + k < n {
+                    sum += pass[(y + k) * n + x] * weights[k + reach]
+                }
+                shadow[y * n + x] = sum * 0.248
+            }
+        }
+
+        // Body over the black shadow, straight alpha.
+        var out = [PNG.RGBA<UInt8>]()
+        out.reserveCapacity(n * n)
+        for y in 0..<n {
+            for x in 0..<n {
+                let bx = x - origin, by = y - origin
+                var bodyAlpha: Float = 0
+                var color = (r: Float(0), g: Float(0), b: Float(0))
+                if bx >= 0, bx < side, by >= 0, by < side {
+                    let p = body[by * side + bx]
+                    bodyAlpha = coverage[by * side + bx] * Float(p.a) / 255
+                    color = (Float(p.r), Float(p.g), Float(p.b))
+                }
+                let a = bodyAlpha + shadow[y * n + x] * (1 - bodyAlpha)
+                func channel(_ c: Float) -> UInt8 {
+                    a <= 0 ? 0 : UInt8(min(255, (c * bodyAlpha / a).rounded()))
+                }
+                out.append(PNG.RGBA(channel(color.r), channel(color.g), channel(color.b),
+                                    UInt8(min(255, (a * 255).rounded()))))
+            }
+        }
+        return out
     }
 
     /// Straight-alpha RGBA from premultiplied BGRA (the render's format).

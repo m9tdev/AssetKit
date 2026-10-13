@@ -76,6 +76,23 @@ public struct LooseFile: Sendable {
 }
 
 public struct XCAssetCompiler: Sendable {
+    /// The renditions a classic macOS car keeps (actool 27.0 macosx
+    /// oracles). Its key has no idiom, subtype or 3x slot, so:
+    /// - an asset with mac-idiom renditions keeps those and drops its
+    ///   universal ones; other idioms (iphone, ipad, …) are dropped;
+    /// - no 3x renditions (Macs have no 3x displays).
+    static func macRenditions(_ renditions: [Rendition]) -> [Rendition] {
+        let namesWithMac = Set(renditions.filter { $0.idiom == .mac }.map(\.name))
+        return renditions.filter { rendition in
+            guard rendition.scale != .x3 else { return false }
+            switch rendition.idiom {
+            case .mac: return true
+            case .universal: return !namesWithMac.contains(rendition.name)
+            default: return false
+            }
+        }
+    }
+
     public var deploymentTarget: String
     /// Strategy used to rasterise `.svg` sources to PNG bytes. Defaults to
     /// `RsvgConvertRasterizer`, which shells out to `rsvg-convert`. Replace
@@ -216,16 +233,12 @@ public struct XCAssetCompiler: Sendable {
         }
         appIconBundle?.alternateIconNames = alternates.sorted()
 
-        let classicMac = platform == "macosx" && iconComposer != nil
+        let classicMac = platform == "macosx" && (iconComposer != nil || !alternateIconComposers.isEmpty)
         if classicMac {
-            // Macs have no 3x displays: actool 27.0 writes symbols at 1x and
-            // 2x only for macosx (oracle: a symbolset with the `.icon`).
-            renditions.removeAll { rendition in
-                switch rendition.body {
-                case .symbolVector, .symbolCached, .symbolPacked: return rendition.scale == .x3
-                default: return false
-                }
-            }
+            renditions = Self.macRenditions(renditions)
+            // An alternate whose renditions were all for other idioms is gone.
+            alternates = alternates.filter { name in renditions.contains { $0.name == name } }
+            appIconBundle?.alternateIconNames = alternates.sorted()
         }
 
         let writer = CARWriter(

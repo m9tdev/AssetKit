@@ -116,6 +116,13 @@ enum KeyFormat {
             }
         }
         var format = classicMacKeyOrder.filter { $0 != .dimension2 || usesDimension2 }
+        // P3 variants append displayGamut after scale (oracle: an imageset
+        // with sRGB and display-P3 entries, with and without the `.icon`:
+        // [.., 11, 12, 24]). Its rank next to the symbol attributes is not
+        // verified; ascending id order is assumed.
+        if renditions.contains(where: { $0.gamut == .displayP3 }) {
+            format.append(.displayGamut)
+        }
         if usesGlyphs || renditions.contains(where: { $0.deploymentTarget != nil }) {
             format.append(.deploymentTarget)
         }

@@ -16,6 +16,9 @@ public enum XCAssetCompilerError: Error, Sendable, Equatable {
     case svgRasterizationFailed(asset: String, filename: String, underlying: String)
     case pdfRasterizationFailed(asset: String, filename: String, underlying: String)
     case heicDecodeFailed(asset: String, filename: String, underlying: String)
+    /// Two renditions packed to the same key: CoreUI would resolve only one
+    /// of them (a binary search over the RENDITIONS tree).
+    case duplicateRenditionKey(asset: String)
 }
 
 extension XCAssetCompilerError: CustomStringConvertible {
@@ -49,6 +52,8 @@ extension XCAssetCompilerError: CustomStringConvertible {
             return "Failed to rasterise SVG asset '\(asset)' file '\(filename)': \(underlying)"
         case .pdfRasterizationFailed(let asset, let filename, let underlying):
             return "Failed to rasterise PDF asset '\(asset)' file '\(filename)': \(underlying)"
+        case .duplicateRenditionKey(let asset):
+            return "Asset '\(asset)' has two renditions with the same rendition key"
         case .heicDecodeFailed(let asset, let filename, let underlying):
             return "Failed to decode HEIC asset '\(asset)' file '\(filename)': \(underlying)"
         }

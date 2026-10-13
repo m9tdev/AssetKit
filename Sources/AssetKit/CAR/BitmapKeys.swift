@@ -55,6 +55,9 @@ enum BitmapKeys {
                 w.writeLE(isSymbol ? UInt32(0x10) : UInt32(1))
             case .glyphSize:
                 w.writeLE(isSymbol ? UInt32(4) : UInt32(1))
+            case .displayGamut:
+                // 3 for an asset with display-P3 variants (oracle: `Wide`).
+                w.writeLE(renditions.contains { $0.gamut == .displayP3 } ? UInt32(3) : UInt32(1))
             default:
                 w.writeLE(UInt32(1))
             }

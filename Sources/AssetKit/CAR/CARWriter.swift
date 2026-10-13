@@ -52,6 +52,10 @@ struct CARWriter: Sendable {
         let renditionData: [(key: Data, value: Data)] = renditions.map { rendition in
             (renditionKey(rendition).encode(format: keyFormat), csiData(for: rendition))
         }
+        var seenKeys = Set<Data>()
+        for (rendition, entry) in zip(renditions, renditionData) where !seenKeys.insert(entry.key).inserted {
+            throw XCAssetCompilerError.duplicateRenditionKey(asset: rendition.name)
+        }
         let facetData: [(key: Data, value: Data)] = layout.assets
             .map { asset in (Data(asset.name.utf8), FacetKeys.value(for: asset.name, kind: facetKind(asset))) }
             .sorted { BOMTree.byteCompare($0.key, $1.key) < 0 }
@@ -227,9 +231,6 @@ struct CARWriter: Sendable {
         return bom.finalize()
     }
 
-    /// BITMAPKEYS entries: inline u32 key = NameIdentifier (big-endian 4
-    /// bytes), value = the 52/48-byte descriptor. Color-only assets produce
-    /// no row.
     /// The rendition key; a classic macOS car keys the light appearance as
     /// NSAppearanceNameAqua (8) instead of iOS's UIAppearanceLight (4).
     private func renditionKey(_ rendition: Rendition) -> RenditionKey {
@@ -248,6 +249,10 @@ struct CARWriter: Sendable {
         }
         return hasStack ? .iconStack : asset.kind
     }
+
+    /// BITMAPKEYS entries: inline u32 key = NameIdentifier (big-endian 4
+    /// bytes), value = the descriptor. iOS: color-only assets produce no
+    /// row. Classic macOS: every facet has a row.
 
     private func bitmapEntries(layout: CARLayout, keyFormat: [AttributeID]) -> [(key: Data, value: Data)] {
         if classicMacSchema {

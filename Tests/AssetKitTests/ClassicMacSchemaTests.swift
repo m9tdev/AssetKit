@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import AssetKit
+import PNG
 
 /// The classic macOS layout actool 27.0 writes for `--platform macosx`
 /// (oracle: the OpenDisplay `.icon`, alone, with an imageset and a colorset,
@@ -56,5 +57,62 @@ struct ClassicMacSchemaTests {
         let header = try #require(data.range(of: Data("RATC".utf8)))
         let semantics = data[header.lowerBound + 432..<header.lowerBound + 436]
         #expect(Array(semantics) == [1, 0, 0, 0])
+    }
+
+    static func image(_ name: String, idiom: Idiom, scale: Scale, gamut: Gamut? = nil) -> Rendition {
+        Rendition(
+            name: name, idiom: idiom, scale: scale, gamut: gamut,
+            body: .bitmap(BitmapBody(
+                width: 2, height: 2, pixelsBGRA: [UInt8](repeating: 255, count: 16),
+                colorSpaceID: 1, kind: .image, renditionName: "\(name).png")))
+    }
+
+    @Test("macOS keeps mac over universal, drops other idioms and 3x")
+    func macRenditionFilter() {
+        let kept = XCAssetCompiler.macRenditions([
+            Self.image("Pic", idiom: .universal, scale: .x2),
+            Self.image("Pic", idiom: .mac, scale: .x2),
+            Self.image("Plain", idiom: .universal, scale: .x2),
+            Self.image("Plain", idiom: .universal, scale: .x3),
+            Self.image("Phone", idiom: .iphone, scale: .x2),
+        ])
+        #expect(kept.map { "\($0.name)/\($0.idiom.rawValue)/\($0.scale!.rawValue)" }
+            == ["Pic/mac/2x", "Plain/universal/2x"])
+    }
+
+    @Test("Duplicate rendition keys are refused")
+    func duplicateKeys() {
+        // Same name and scale, idioms the classic key cannot tell apart.
+        var writer = CARWriter(deploymentTarget: "14.0", renditions: [
+            Self.image("Pic", idiom: .universal, scale: .x2),
+            Self.image("Pic", idiom: .mac, scale: .x2),
+        ])
+        writer.classicMacSchema = true
+        #expect(throws: XCAssetCompilerError.duplicateRenditionKey(asset: "Pic")) { try writer.write() }
+    }
+
+    @Test("P3 variants add displayGamut (key slot and BITMAPKEYS value 3)")
+    func displayGamut() {
+        let renditions = [
+            Self.image("Wide", idiom: .universal, scale: .x2, gamut: .sRGB),
+            Self.image("Wide", idiom: .universal, scale: .x2, gamut: .displayP3),
+        ]
+        let format = KeyFormat.classicMac(for: renditions)
+        #expect(format.map(\.rawValue) == [7, 13, 1, 2, 3, 17, 11, 12, 24])
+        let words = BitmapKeys.classicMacDescriptor(renditions: renditions, keyFormat: format)
+        #expect(Array(words.suffix(8)) == [4, 0, 0, 0, 3, 0, 0, 0])  // scale mask 2x, gamut 3
+    }
+
+    @Test("The macOS icon canvas: transparent corners, opaque body, shadow below")
+    func iconCanvas() {
+        let design = [PNG.RGBA<UInt8>](repeating: PNG.RGBA(255, 128, 0, 255), count: 1024 * 1024)
+        let canvas = IconComposerCompiler.macIconCanvas(design)
+        func alpha(_ x: Int, _ y: Int) -> UInt8 { canvas[y * 1024 + x].a }
+        #expect(alpha(0, 0) == 0 && alpha(1023, 1023) == 0)
+        #expect(alpha(110, 110) == 0)                 // outside the rounded corner
+        #expect(alpha(512, 512) == 255 && alpha(100, 512) == 255 && alpha(923, 512) == 255)
+        #expect(canvas[512 * 1024 + 512].r == 255)    // body colour kept
+        #expect(alpha(512, 940) > alpha(512, 84))     // the shadow falls below the body
+        #expect(alpha(512, 940) > 0 && alpha(512, 1000) == 0)
     }
 }
