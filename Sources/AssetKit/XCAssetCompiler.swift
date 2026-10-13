@@ -193,11 +193,16 @@ public struct XCAssetCompiler: Sendable {
             }
         }
 
-        var alternates = loaded.alternateAppIcons(primary: appIconName).map(\.name)
+        // Without --app-icon, a catalog with one appiconset uses it as the
+        // primary (CatalogLoader.appIcon(named:)); it is not also its own
+        // alternate (that wrote its renditions twice, with identical keys).
+        let primaryName = iconComposer == nil ? loaded.appIcon(named: appIconName)?.name : appIconName
+        let alternateAppIcons = loaded.alternateAppIcons(primary: appIconName).filter { $0.name != primaryName }
+        var alternates = alternateAppIcons.map(\.name)
         // Each alternate .appiconset renders its own renditions into the car.
         // Apple's partial plist doesn't carry CFBundleIconFiles for them
         // (oracle: only CFBundleIconName), so no per-set plist/loose here.
-        for altAppIcon in loaded.alternateAppIcons(primary: appIconName) {
+        for altAppIcon in alternateAppIcons {
             let plist = try AppIconPlistEmitter.emit(altAppIcon)
             renditions.append(contentsOf: try ImageRenderer.appIconRenditions(
                 for: altAppIcon, files: plist.iconFiles))
