@@ -52,9 +52,9 @@ struct CARWriter: Sendable {
         let renditionData: [(key: Data, value: Data)] = renditions.map { rendition in
             (renditionKey(rendition).encode(format: keyFormat), csiData(for: rendition))
         }
-        var seenKeys = Set<Data>()
-        for (rendition, entry) in zip(renditions, renditionData) where !seenKeys.insert(entry.key).inserted {
-            throw XCAssetCompilerError.duplicateRenditionKey(asset: rendition.name)
+        for asset in Self.duplicateKeyAssets(renditions.map(\.name), keys: renditionData.map(\.key)) {
+            FileHandle.standardError.write(Data(
+                "warning: asset '\(asset)' has renditions with the same rendition key; CoreUI resolves only one of them\n".utf8))
         }
         let facetData: [(key: Data, value: Data)] = layout.assets
             .map { asset in (Data(asset.name.utf8), FacetKeys.value(for: asset.name, kind: facetKind(asset))) }
@@ -231,6 +231,18 @@ struct CARWriter: Sendable {
         return bom.finalize()
     }
 
+    /// Names of the assets that have two renditions with the same key. AssetKit
+    /// does not key some variants (a "light" appearance next to "any", locale,
+    /// high contrast), so those collide; the writer keeps them as before and
+    /// warns (CoreUI resolves only one entry per key).
+    static func duplicateKeyAssets(_ names: [String], keys: [Data]) -> [String] {
+        var seen = Set<Data>(), duplicates: [String] = []
+        for (name, key) in zip(names, keys) where !seen.insert(key).inserted && !duplicates.contains(name) {
+            duplicates.append(name)
+        }
+        return duplicates
+    }
+
     /// The rendition key; a classic macOS car keys the light appearance as
     /// NSAppearanceNameAqua (8) instead of iOS's UIAppearanceLight (4).
     private func renditionKey(_ rendition: Rendition) -> RenditionKey {
@@ -263,7 +275,8 @@ struct CARWriter: Sendable {
                     UInt8(truncatingIfNeeded: identifier >> 16),
                     UInt8(truncatingIfNeeded: identifier >> 8),
                     UInt8(truncatingIfNeeded: identifier),
-                ]), value: BitmapKeys.classicMacDescriptor(renditions: asset.renditions, keyFormat: keyFormat))
+                ]), value: BitmapKeys.classicMacDescriptor(
+                    keys: asset.renditions.map(renditionKey), keyFormat: keyFormat))
             }
         }
         return layout.assets.compactMap { asset in

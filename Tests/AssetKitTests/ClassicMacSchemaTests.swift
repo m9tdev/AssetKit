@@ -12,6 +12,11 @@ struct ClassicMacSchemaTests {
         name: "Tint", idiom: .universal, scale: .x1,
         body: .color(ColorBody(components: [1, 0.5, 0, 1], colorSpaceID: 1)))
 
+    /// A rendition at Icon Index 0 (the MultiSized container of an icon).
+    static let stack = Rendition(
+        name: "AppIcon", idiom: .universal, scale: .x1,
+        body: .multiSized(MultiSizedBody(sizes: [.init(pointWidth: 16, pointHeight: 16, iconIndex: 1)])))
+
     static func icon(scale: Scale, index: UInt16, side: UInt32) -> Rendition {
         Rendition(
             name: "AppIcon", idiom: .universal, scale: scale, iconIndex: index,
@@ -37,11 +42,11 @@ struct ClassicMacSchemaTests {
         }
         let format = KeyFormat.classicMac(for: [Self.icon(scale: .x2, index: 1, side: 32)])
         let none = UInt32.max
-        #expect(words(BitmapKeys.classicMacDescriptor(renditions: [Self.color], keyFormat: format))
+        #expect(words(BitmapKeys.classicMacDescriptor(keys: [Self.color].map(RenditionKey.init), keyFormat: format))
             == [1, 0, 40, 9, none, 1, none, none, 1, none, 1, 1, 2])
         let icons = [Self.icon(scale: .x2, index: 1, side: 32), Self.icon(scale: .x1, index: 7, side: 1024)]
-        #expect(words(BitmapKeys.classicMacDescriptor(renditions: icons, keyFormat: format))
-            == [1, 0, 40, 9, none, 1, none, none, 1, none, 255, 1, 6])
+        #expect(words(BitmapKeys.classicMacDescriptor(keys: (icons + [Self.stack]).map(RenditionKey.init), keyFormat: format))
+            == [1, 0, 40, 9, none, 1, none, none, 1, none, 0b1000_0011, 1, 6])
     }
 
     @Test("The car says macosx and uses NSAppearance names")
@@ -80,15 +85,19 @@ struct ClassicMacSchemaTests {
             == ["Pic/mac/2x", "Plain/universal/2x"])
     }
 
-    @Test("Duplicate rendition keys are refused")
-    func duplicateKeys() {
-        // Same name and scale, idioms the classic key cannot tell apart.
+    @Test("Duplicate rendition keys are reported, not refused")
+    func duplicateKeys() throws {
+        // AssetKit does not key a light appearance next to any, so these
+        // collide; output stays as before (both written), with a warning.
+        let names = ["Pic", "Pic", "Other"]
+        let keys = [Data([1, 2]), Data([1, 2]), Data([3, 4])]
+        #expect(CARWriter.duplicateKeyAssets(names, keys: keys) == ["Pic"])
         var writer = CARWriter(deploymentTarget: "14.0", renditions: [
             Self.image("Pic", idiom: .universal, scale: .x2),
             Self.image("Pic", idiom: .mac, scale: .x2),
         ])
         writer.classicMacSchema = true
-        #expect(throws: XCAssetCompilerError.duplicateRenditionKey(asset: "Pic")) { try writer.write() }
+        _ = try writer.write()
     }
 
     @Test("P3 variants add displayGamut (key slot and BITMAPKEYS value 3)")
@@ -99,7 +108,7 @@ struct ClassicMacSchemaTests {
         ]
         let format = KeyFormat.classicMac(for: renditions)
         #expect(format.map(\.rawValue) == [7, 13, 1, 2, 3, 17, 11, 12, 24])
-        let words = BitmapKeys.classicMacDescriptor(renditions: renditions, keyFormat: format)
+        let words = BitmapKeys.classicMacDescriptor(keys: renditions.map(RenditionKey.init), keyFormat: format)
         #expect(Array(words.suffix(8)) == [4, 0, 0, 0, 3, 0, 0, 0])  // scale mask 2x, gamut 3
     }
 
