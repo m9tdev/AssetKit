@@ -215,6 +215,7 @@ struct RenditionKey: Hashable, Sendable {
             case .subtype: w.writeLE(subtype)
             case .dimension2: w.writeLE(dimension2)
             case .dimension1: w.writeLE(UInt16(0))
+            case .size, .layer: w.writeLE(UInt16(0))
             case .deploymentTarget: w.writeLE(deploymentTarget)
             case .glyphWeight: w.writeLE(glyphWeight)
             case .glyphSize: w.writeLE(glyphSize)

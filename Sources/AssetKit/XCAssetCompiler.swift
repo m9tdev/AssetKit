@@ -153,6 +153,8 @@ public struct XCAssetCompiler: Sendable {
         if let iconComposer {
             // Icon Composer .icon source: the layered rendition set plus the
             // loose home-screen PNGs and partial plist.
+            var iconComposer = iconComposer
+            iconComposer.platform = platform
             let compiled = try IconComposerCompiler.compile(input: iconComposer)
             renditions.append(contentsOf: compiled.renditions)
             appIconBundle = compiled.appIconBundle
@@ -201,15 +203,30 @@ public struct XCAssetCompiler: Sendable {
                 for: altAppIcon, files: plist.iconFiles))
         }
         for alternate in alternateIconComposers {
+            var alternate = alternate
+            alternate.platform = platform
             let compiled = try IconComposerCompiler.compile(input: alternate)
             renditions.append(contentsOf: compiled.renditions)
             alternates.append(alternate.name)
         }
         appIconBundle?.alternateIconNames = alternates.sorted()
 
+        let classicMac = platform == "macosx" && iconComposer != nil
+        if classicMac {
+            // Macs have no 3x displays: actool 27.0 writes symbols at 1x and
+            // 2x only for macosx (oracle: a symbolset with the `.icon`).
+            renditions.removeAll { rendition in
+                switch rendition.body {
+                case .symbolVector, .symbolCached, .symbolPacked: return rendition.scale == .x3
+                default: return false
+                }
+            }
+        }
+
         let writer = CARWriter(
             deploymentTarget: deploymentTarget, renditions: renditions,
-            macSchema: platform == "macosx")
+            macSchema: platform == "macosx" && !classicMac,
+            classicMacSchema: classicMac)
         let bytes = try writer.write()
 
         return CompileResult(carData: bytes, renditionCount: renditions.count, appIconBundle: appIconBundle)

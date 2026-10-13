@@ -19,11 +19,16 @@ public enum IconComposerCompiler {
         public var directory: URL
         /// actool's --target-device values.
         public var idioms: [String]
+        /// actool's --platform value. `macosx` compiles the macOS icon set:
+        /// flat icon images at 16 to 1024 pt for the system appearance,
+        /// an `.icns`, and the CFBundleIconFile/CFBundleIconName plist keys.
+        public var platform: String
 
-        public init(name: String, directory: URL, idioms: [String]) {
+        public init(name: String, directory: URL, idioms: [String], platform: String = "iphoneos") {
             self.name = name
             self.directory = directory
             self.idioms = idioms
+            self.platform = platform
         }
     }
 
@@ -502,7 +507,9 @@ public enum IconComposerCompiler {
 
         // Pre-rendered icons per appearance, keyed per idiom, plus the
         // MultiSized containers.
-        let idioms = input.idioms.map { Idiom(rawValue: $0) ?? .universal }
+        // macOS renders its own flat icon set (compileMacIcons): no iOS
+        // per-idiom pre-renders, so no render pass here.
+        let idioms = input.platform == "macosx" ? [] : input.idioms.map { Idiom(rawValue: $0) ?? .universal }
         var iconRenditions: [Rendition] = []
         var lightPixels: [UInt8] = []
         for appearance in appearances {
@@ -545,6 +552,13 @@ public enum IconComposerCompiler {
                 iconComposerSource: true,
                 body: .namedGradient(NamedGradientBody(
                     stopColorNames: gradient.stops.map { colorNames[$0]! }))))
+        }
+
+        if input.platform == "macosx" {
+            return try compileMacIcons(
+                input: input, model: model, images: images,
+                otherRenditions: colorRenditions + gradientRenditions + imageRenditions
+                    + groupRenditions + stackRenditions)
         }
 
         // Order the rendition list by rendition-key bytes: the CARWriter
@@ -603,6 +617,92 @@ public enum IconComposerCompiler {
             looseFiles: loose)
 
         return Result(renditions: renditions, appIconBundle: bundle)
+    }
+
+    /// macOS: the flat icon images Finder and the Dock draw (actool 27.0
+    /// macosx oracle). Seven Icon Image renditions for the system appearance
+    /// only, 16 to 512 pt at 2x and 1024 pt at 1x, Icon Index 1 to 7; one
+    /// MultiSized container listing the seven sizes; the `.icns`; and the
+    /// flat CFBundleIconFile/CFBundleIconName keys. The dark and tinted
+    /// looks come from the layered stack, as on Apple-built bundles.
+    static func compileMacIcons(
+        input: Input, model: IconModel, images: [String: LoadedImage], otherRenditions: [Rendition]
+    ) throws -> Result {
+        let light = render(model: model, images: images, appearance: nil)
+        let straight = straightRGBA(fromPremultipliedBGRA: light)
+        let tag = renditionUUIDTag()
+        let sizes: [(points: Int, scale: Scale)] = [
+            (16, .x2), (32, .x2), (64, .x2), (128, .x2), (256, .x2), (512, .x2), (1024, .x1),
+        ]
+        var icons: [Rendition] = []
+        var sizeEntries: [MultiSizedBody.Size] = []
+        for (index, size) in sizes.enumerated() {
+            let side = size.points * size.scale.factor
+            let pixels = side == canvasSide ? light
+                : premultipliedBGRA(fromStraightRGBA: downsampleRGBA(straight, from: canvasSide, to: side))
+            icons.append(Rendition(
+                name: input.name, idiom: .universal, scale: size.scale,
+                appearance: nil,
+                iconComposerSource: true, iconIndex: UInt16(index + 1),
+                body: .bitmap(BitmapBody(
+                    width: UInt32(side), height: UInt32(side),
+                    pixelsBGRA: pixels, colorSpaceID: 1, kind: .appIcon,
+                    renditionName:
+                        "\(input.name)\(size.points)x\(size.points)_NSAppearanceNameSystem_\(tag).png"))))
+            sizeEntries.append(.init(
+                pointWidth: UInt32(size.points), pointHeight: UInt32(size.points), iconIndex: UInt32(index + 1)))
+        }
+        let multiSized = Rendition(
+            name: input.name, idiom: .universal, scale: .x1,
+            body: .multiSized(MultiSizedBody(sizes: sizeEntries)))
+
+        var pngs: [Int: Data] = [:]
+        for side in [16, 32, 128, 256] {
+            pngs[side] = try pngData(downsampleRGBA(straight, from: canvasSide, to: side), side: side)
+        }
+        let bundle = AppIconBundle(
+            primaryIconName: input.name,
+            infoPlistAdditions: [
+                "CFBundleIconFile": input.name,
+                "CFBundleIconName": input.name,
+            ] as [String: any Sendable],
+            looseFiles: [LooseFile(
+                name: "\(input.name).icns",
+                data: try IcnsWriter.write(iconName: input.name, pngs: pngs))])
+        return Result(renditions: otherRenditions + icons + [multiSized], appIconBundle: bundle)
+    }
+
+    /// Straight-alpha RGBA from premultiplied BGRA (the render's format).
+    static func straightRGBA(fromPremultipliedBGRA bgra: [UInt8]) -> [PNG.RGBA<UInt8>] {
+        stride(from: 0, to: bgra.count, by: 4).map { i in
+            let a = Int(bgra[i + 3])
+            func un(_ c: UInt8) -> UInt8 { a == 0 ? 0 : UInt8(min(255, Int(c) * 255 / a)) }
+            return PNG.RGBA(un(bgra[i + 2]), un(bgra[i + 1]), un(bgra[i]), bgra[i + 3])
+        }
+    }
+
+    /// Premultiplied BGRA (BitmapBody's format) from straight-alpha RGBA.
+    static func premultipliedBGRA(fromStraightRGBA rgba: [PNG.RGBA<UInt8>]) -> [UInt8] {
+        var out = [UInt8]()
+        out.reserveCapacity(rgba.count * 4)
+        for p in rgba {
+            let a = Int(p.a)
+            out.append(UInt8(Int(p.b) * a / 255))
+            out.append(UInt8(Int(p.g) * a / 255))
+            out.append(UInt8(Int(p.r) * a / 255))
+            out.append(p.a)
+        }
+        return out
+    }
+
+    static func pngData(_ rgba: [PNG.RGBA<UInt8>], side: Int) throws -> Data {
+        let image = PNG.Image(
+            packing: rgba, size: (side, side), layout: .init(format: .rgba8(palette: [], fill: nil)))
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("iconcomposer-\(UUID().uuidString).png").path
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        try image.compress(path: path, level: 9)
+        return try Data(contentsOf: URL(fileURLWithPath: path))
     }
 
     static func appearanceNameTag(_ appearance: Appearance?) -> String {
