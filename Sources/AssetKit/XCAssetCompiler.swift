@@ -78,19 +78,22 @@ public struct LooseFile: Sendable {
 public struct XCAssetCompiler: Sendable {
     /// The renditions a classic macOS car keeps (actool 27.0 macosx
     /// oracles). Its key has no idiom, subtype or 3x slot, so:
-    /// - an asset with mac-idiom renditions keeps those and drops its
-    ///   universal ones; other idioms (iphone, ipad, …) are dropped;
-    /// - no 3x renditions (Macs have no 3x displays).
+    /// - no 3x renditions (Macs have no 3x displays), no idioms other than
+    ///   mac and universal;
+    /// - where a mac and a universal rendition land on the same key (same
+    ///   asset, scale, appearance, gamut, ...), the mac one wins. A slot
+    ///   without a mac rendition keeps its universal one (oracle: universal
+    ///   1x and dark 2x kept next to a mac-only 2x).
     static func macRenditions(_ renditions: [Rendition]) -> [Rendition] {
-        let namesWithMac = Set(renditions.filter { $0.idiom == .mac }.map(\.name))
-        return renditions.filter { rendition in
-            guard rendition.scale != .x3 else { return false }
-            switch rendition.idiom {
-            case .mac: return true
-            case .universal: return !namesWithMac.contains(rendition.name)
-            default: return false
-            }
+        let candidates = renditions.filter { rendition in
+            rendition.scale != .x3 && (rendition.idiom == .mac || rendition.idiom == .universal)
         }
+        let format = KeyFormat.classicMac(for: candidates)
+        let keys = candidates.map { RenditionKey(rendition: $0).encode(format: format) }
+        let macSlots = Set(zip(candidates, keys).filter { $0.0.idiom == .mac }.map(\.1))
+        return zip(candidates, keys)
+            .filter { rendition, key in rendition.idiom == .mac || !macSlots.contains(key) }
+            .map(\.0)
     }
 
     public var deploymentTarget: String

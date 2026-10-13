@@ -6,6 +6,23 @@
   "NSAppearanceNameSystem": 0
  },
  "bitmapKeys": {
+  "Mix": [
+   1,
+   0,
+   48,
+   11,
+   4294967295,
+   1,
+   4294967295,
+   4294967295,
+   1,
+   4294967295,
+   1,
+   1,
+   1,
+   6,
+   1
+  ],
   "Pic": [
    1,
    0,
@@ -314,6 +331,7 @@
   ]
  },
  "facets": {
+  "Mix": 181,
   "Pic": 181,
   "Test": 245,
   "Test/Group": 246,
@@ -353,6 +371,9 @@
  },
  "platform": "macosx",
  "renditions": [
+  "Mix|Appearance=1,Element=85,Part=181,Scale=2",
+  "Mix|Element=85,Part=181,Scale=1",
+  "Mix|Element=85,Part=181,Scale=2",
   "Pic|Element=85,Part=181,Scale=2",
   "Test/Group 2|Appearance=1,Element=85,Part=246,Scale=1",
   "Test/Group 2|Appearance=10,Element=85,Part=246,Scale=1",

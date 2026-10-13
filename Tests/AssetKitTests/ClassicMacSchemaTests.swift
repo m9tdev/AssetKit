@@ -80,9 +80,11 @@ struct ClassicMacSchemaTests {
             Self.image("Plain", idiom: .universal, scale: .x2),
             Self.image("Plain", idiom: .universal, scale: .x3),
             Self.image("Phone", idiom: .iphone, scale: .x2),
+            Self.image("Mix", idiom: .universal, scale: .x1),   // no mac 1x: kept
+            Self.image("Mix", idiom: .mac, scale: .x2),
         ])
         #expect(kept.map { "\($0.name)/\($0.idiom.rawValue)/\($0.scale!.rawValue)" }
-            == ["Pic/mac/2x", "Plain/universal/2x"])
+            == ["Pic/mac/2x", "Plain/universal/2x", "Mix/universal/1x", "Mix/mac/2x"])
     }
 
     @Test("Duplicate rendition keys are reported, not refused")
