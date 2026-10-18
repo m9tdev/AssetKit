@@ -25,9 +25,9 @@ enum AppIconPlistEmitter {
         var allFiles: [IconFile] = []
 
         for image in appIcon.contents.images {
-            guard let filename = image.filename, !filename.isEmpty else {
-                throw XCAssetCompilerError.appIconSizeMissing(asset: appIcon.name, size: image.size)
-            }
+            // An empty slot (no image assigned): actool skips it.
+            // AppIconRequirements warns when it is a required size.
+            guard let filename = image.filename, !filename.isEmpty else { continue }
             let src = appIcon.directory.appendingPathComponent(filename)
             guard FileManager.default.fileExists(atPath: src.path) else {
                 throw XCAssetCompilerError.missingReferencedFile(asset: appIcon.name, filename: filename)

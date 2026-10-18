@@ -26,6 +26,11 @@ let result = try await compiler.compile(catalog: catalogURL)
 
 try result.carData.write(to: outputURL.appendingPathComponent("Assets.car"))
 
+for warning in result.warnings {
+    // actool's format: "<catalog>:./AppIcon.appiconset: warning: <message>"
+    print("\(catalogURL.path):\(warning.path): warning: \(warning.message)")
+}
+
 if let bundle = result.appIconBundle {
     // Merge bundle.infoPlistAdditions into the app's Info.plist
     // Write each bundle.looseFiles entry into the bundle root for SpringBoard's
@@ -42,6 +47,7 @@ if let bundle = result.appIconBundle {
   - PDF sources, each emitted as one preserved vector rendition (PDF bytes kept raw inside a DWAR envelope, `'PDF '` pixelFormat) plus three rasterised bitmap fallbacks at `round(page points × scale)` — the Xcode 27.0 shapes verified against the NetNewsWire oracle. Neutral-content (DeviceGray) pages compile to gray gamma 22; `preserves-vector-representation` moves the vector rendition between the vector part (scale 1) and the generic-image part (scale 0); `template-rendering-intent` lands in the bitmap renditionFlags. Rasterisation is delegated to an injectable `PDFRasterizer`; the default (`PdftoCairoRasterizer`) shells out to poppler's `pdfinfo` and `pdftocairo` (Arch: `pacman -S poppler`, Debian/Ubuntu: `apt install poppler-utils`, macOS: `brew install poppler`).
 - `.colorset` (sRGB and display-P3, hex or float components, dark/light appearances)
 - `.appiconset` (per-idiom and per-size, with the loose-PNG fallback that SpringBoard expects alongside `Assets.car`). PNG sources only; SVG/JPG/PDF are rejected because SpringBoard's icon-render pipeline requires PNG.
+  - Empty slots (entries without a `filename`) are skipped, as actool does. On iOS, a required size left empty (60x60@2x for iPhone, 76x76@2x and 83.5x83.5@2x for iPad, the 1024x1024 App Store icon) adds one of actool's warnings to `result.warnings`, for example `A 1024x1024 app store icon is required for iOS apps`. Set `targetDevices` (actool's `--target-device`) to choose the iPhone or iPad sizes. A set with no images at all compiles to no icon.
 
 ## What it deliberately doesn't support
 
