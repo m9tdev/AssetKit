@@ -57,17 +57,47 @@ struct AppIconPlistTests {
         #expect(files?.contains("\(basename)60x60") == true)
     }
 
-    @Test("Rejects appicon entry missing filename")
-    func missingFilenameThrows() throws {
+    @Test("Skips empty slots (entries without a filename)")
+    func emptySlotsAreSkipped() throws {
         let tmp = FileManager.default.temporaryDirectory
             .appendingPathComponent("AppIcon-\(UUID().uuidString).appiconset", isDirectory: true)
         try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: tmp) }
 
+        try solidPNG().write(to: tmp.appendingPathComponent("Icon-60@3x.png"))
         let json = """
         {
           "images" : [
-            { "idiom" : "iphone", "size" : "60x60", "scale" : "2x" }
+            { "idiom" : "iphone", "size" : "60x60", "scale" : "2x" },
+            { "idiom" : "iphone", "size" : "60x60", "scale" : "3x", "filename" : "Icon-60@3x.png" },
+            { "idiom" : "ios-marketing", "size" : "1024x1024", "scale" : "1x" }
+          ],
+          "info" : { "version" : 1, "author" : "xcode" }
+        }
+        """
+        try Data(json.utf8).write(to: tmp.appendingPathComponent("Contents.json"))
+        let contents = try JSONDecoder().decode(
+            AppIconContents.self,
+            from: Data(contentsOf: tmp.appendingPathComponent("Contents.json"))
+        )
+        let appIcon = LoadedAppIcon(name: "AppIcon", directory: tmp, contents: contents)
+        let result = try AppIconPlistEmitter.emit(appIcon)
+        #expect(result.iconFiles.map(\.sourceURL.lastPathComponent) == ["Icon-60@3x.png"])
+        #expect(result.infoPlistAdditions["CFBundleIconFiles"] as? [String] == ["AppIcon60x60"])
+    }
+
+    @Test("Rejects an image that is in no slot (no size)")
+    func imageWithoutSizeThrows() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AppIcon-\(UUID().uuidString).appiconset", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        try solidPNG().write(to: tmp.appendingPathComponent("Icon.png"))
+        let json = """
+        {
+          "images" : [
+            { "idiom" : "iphone", "size" : "", "scale" : "2x", "filename" : "Icon.png" }
           ],
           "info" : { "version" : 1, "author" : "xcode" }
         }
