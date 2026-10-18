@@ -16,8 +16,9 @@ public struct CompileResult: Sendable {
     /// catalog contained exactly one `.appiconset`.
     public var appIconBundle: AppIconBundle?
 
-    /// Warnings about the catalog that don't stop the compile, for example an
-    /// asset whose renditions share a rendition key.
+    /// Warnings actool prints for the catalog (`com.apple.actool.document.warnings`),
+    /// for example a required app icon size that the primary set leaves empty,
+    /// or an asset whose renditions share a rendition key.
     public var warnings: [CompileWarning]
 
     public init(
@@ -123,16 +124,21 @@ public struct XCAssetCompiler: Sendable {
     /// including the default `iphoneos`, compiles byte-identically to the
     /// previous releases.
     public var platform: String
+    /// The actool `--target-device` values. They select the app icon sizes
+    /// that a partly filled iOS app icon set is required to have.
+    public var targetDevices: [String]
 
     public init(
         deploymentTarget: String,
         platform: String = "iphoneos",
+        targetDevices: [String] = ["iphone", "ipad"],
         svgRasterizer: any SVGRasterizer = RsvgConvertRasterizer(),
         pdfRasterizer: any PDFRasterizer = PdftoCairoRasterizer(),
         heicDecoder: any HEICDecoder = HeifConvertDecoder()
     ) {
         self.deploymentTarget = deploymentTarget
         self.platform = platform
+        self.targetDevices = targetDevices
         self.svgRasterizer = svgRasterizer
         self.pdfRasterizer = pdfRasterizer
         self.heicDecoder = heicDecoder
@@ -182,6 +188,7 @@ public struct XCAssetCompiler: Sendable {
         renditions.append(contentsOf: SymbolRenderer.renditions(for: preparedSymbols))
 
         var appIconBundle: AppIconBundle?
+        var warnings: [CompileWarning] = []
         if let iconComposer {
             // Icon Composer .icon source: the layered rendition set plus the
             // loose home-screen PNGs and partial plist.
@@ -190,7 +197,13 @@ public struct XCAssetCompiler: Sendable {
             let compiled = try IconComposerCompiler.compile(input: iconComposer)
             renditions.append(contentsOf: compiled.renditions)
             appIconBundle = compiled.appIconBundle
-        } else if let appIcon = loaded.appIcon(named: appIconName) {
+        } else if let appIcon = loaded.appIcon(named: appIconName), AppIconRequirements.hasImages(appIcon) {
+            // Empty slots are skipped; a set with no images at all gives no
+            // icon (Xcode's empty AppIcon placeholder). A required size left
+            // empty is a warning, as with actool.
+            warnings += AppIconRequirements.warnings(
+                for: appIcon, platform: platform, targetDevices: targetDevices,
+                path: Self.catalogPath(of: appIcon.directory, in: catalogURL))
             let plist = try AppIconPlistEmitter.emit(appIcon)
             renditions.append(contentsOf: try ImageRenderer.appIconRenditions(for: appIcon, files: plist.iconFiles))
             if platform == "macosx" {
@@ -229,7 +242,8 @@ public struct XCAssetCompiler: Sendable {
         // primary (CatalogLoader.appIcon(named:)); it is not also its own
         // alternate (that wrote its renditions twice, with identical keys).
         let primaryName = iconComposer == nil ? loaded.appIcon(named: appIconName)?.name : appIconName
-        let alternateAppIcons = loaded.alternateAppIcons(primary: appIconName).filter { $0.name != primaryName }
+        let alternateAppIcons = loaded.alternateAppIcons(primary: appIconName)
+            .filter { $0.name != primaryName && AppIconRequirements.hasImages($0) }
         var alternates = alternateAppIcons.map(\.name)
         // Each alternate .appiconset renders its own renditions into the car.
         // Apple's partial plist doesn't carry CFBundleIconFiles for them
@@ -264,6 +278,14 @@ public struct XCAssetCompiler: Sendable {
 
         return CompileResult(
             carData: car.data, renditionCount: renditions.count, appIconBundle: appIconBundle,
-            warnings: car.warnings)
+            warnings: warnings + car.warnings)
+    }
+
+    /// `asset` relative to the catalog, as actool prints it: `./AppIcon.appiconset`.
+    static func catalogPath(of asset: URL, in catalog: URL) -> String {
+        let root = catalog.standardizedFileURL.path
+        let path = asset.standardizedFileURL.path
+        guard path.hasPrefix(root + "/") else { return "./" + asset.lastPathComponent }
+        return "." + path.dropFirst(root.count)
     }
 }
