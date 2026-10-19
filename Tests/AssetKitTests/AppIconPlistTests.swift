@@ -82,6 +82,37 @@ struct AppIconPlistTests {
             _ = try AppIconPlistEmitter.emit(appIcon)
         }
     }
+
+    @Test("Reads the unscaled 1024 slot of an All Sizes icon set as 1x")
+    func allSizesAppStoreSlotIsOneX() throws {
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AppIcon-\(UUID().uuidString).appiconset", isDirectory: true)
+        try FileManager.default.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: tmp) }
+
+        try solidPNG().write(to: tmp.appendingPathComponent("Icon-60@2x.png"))
+        try solidPNG().write(to: tmp.appendingPathComponent("Icon-1024.png"))
+        // Xcode's "All Sizes" form: universal slots for iOS, the 1024 pt one
+        // without a scale.
+        let json = """
+        {
+          "images" : [
+            { "idiom" : "universal", "platform" : "ios", "size" : "60x60", "scale" : "2x", "filename" : "Icon-60@2x.png" },
+            { "idiom" : "universal", "platform" : "ios", "size" : "1024x1024", "filename" : "Icon-1024.png" }
+          ],
+          "info" : { "version" : 1, "author" : "xcode" }
+        }
+        """
+        try Data(json.utf8).write(to: tmp.appendingPathComponent("Contents.json"))
+        let contents = try JSONDecoder().decode(
+            AppIconContents.self,
+            from: Data(contentsOf: tmp.appendingPathComponent("Contents.json"))
+        )
+        let appIcon = LoadedAppIcon(name: "AppIcon", directory: tmp, contents: contents)
+        let result = try AppIconPlistEmitter.emit(appIcon)
+        #expect(result.iconFiles.map(\.pointSize) == [60, 1024])
+        #expect(result.iconFiles.map(\.scale) == [2, 1])
+    }
 }
 
 // Smallest possible valid PNG (1x1 transparent)
