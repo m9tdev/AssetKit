@@ -32,9 +32,12 @@ enum AppIconPlistEmitter {
             guard FileManager.default.fileExists(atPath: src.path) else {
                 throw XCAssetCompilerError.missingReferencedFile(asset: appIcon.name, filename: filename)
             }
-            guard let (w, _) = image.pointSize, let scale = image.scale?.factor else {
+            // Xcode writes the 1024 pt slot of the "All Sizes" and "Single
+            // Size" forms without a scale; actool compiles it at 1x.
+            guard let (w, _) = image.pointSize else {
                 throw XCAssetCompilerError.appIconSizeMissing(asset: appIcon.name, size: image.size)
             }
+            let scale = (image.scale ?? .x1).factor
             let bundleName = "\(appIcon.name)\(formatSize(w))x\(formatSize(w))"
             let entry = IconFile(
                 idiom: image.idiom,
