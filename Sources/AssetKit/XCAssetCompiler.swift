@@ -261,6 +261,13 @@ public struct XCAssetCompiler: Sendable {
             alternates.append(alternate.name)
         }
         appIconBundle?.alternateIconNames = alternates.sorted()
+        // An empty primary set gives no icon, but its alternates still need
+        // CFBundleAlternateIcons (actool: CFBundleIcons with only those).
+        if appIconBundle == nil, !alternates.isEmpty, platform != "macosx", let primaryName {
+            appIconBundle = AppIconBundle(
+                primaryIconName: primaryName, alternateIconNames: alternates.sorted(),
+                infoPlistAdditions: ["CFBundleIcons": [String: any Sendable]()], looseFiles: [])
+        }
 
         let classicMac = platform == "macosx" && (iconComposer != nil || !alternateIconComposers.isEmpty)
         if classicMac {
