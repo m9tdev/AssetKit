@@ -166,6 +166,28 @@ struct PartialAppIconTests {
         #expect(result.warnings.isEmpty)
     }
 
+    /// actool 27.0 on the same catalog (iphoneos): Alt in the car, and a
+    /// partial plist of CFBundleIcons.CFBundleAlternateIcons.Alt only.
+    @Test("An empty primary set still lists its alternate icons")
+    func emptySetWithAlternate() async throws {
+        let catalog = try Self.catalog(slots: Self.slots(ipad: false), filled: [])
+        defer { try? FileManager.default.removeItem(at: catalog.deletingLastPathComponent()) }
+        let alt = catalog.appendingPathComponent("Alt.appiconset")
+        try FileManager.default.createDirectory(at: alt, withIntermediateDirectories: true)
+        try Self.writePNG(side: 1024, to: alt.appendingPathComponent("alt.png"))
+        try Data(#"{"images":[{"filename":"alt.png","idiom":"universal","platform":"ios","scale":"1x","size":"1024x1024"}],"info":{"author":"xcode","version":1}}"#.utf8)
+            .write(to: alt.appendingPathComponent("Contents.json"))
+        let result = try await Self.compile(catalog, devices: ["iphone"])
+        let names = Set(try CARReader(result.carData).renditionKeys.map { String($0.split(separator: "|")[0]) })
+        #expect(names == ["Alt"])
+        let bundle = try #require(result.appIconBundle)
+        #expect(bundle.primaryIconName == "AppIcon")
+        #expect(bundle.alternateIconNames == ["Alt"])
+        #expect(bundle.infoPlistAdditions.keys.sorted() == ["CFBundleIcons"])
+        #expect((bundle.infoPlistAdditions["CFBundleIcons"] as? [String: any Sendable])?.isEmpty == true)
+        #expect(bundle.looseFiles.isEmpty)
+    }
+
     @Test("A partly filled macOS set compiles its filled slots, without iOS warnings")
     func macPartial() async throws {
         let fm = FileManager.default
