@@ -111,7 +111,10 @@ public enum IconComposerCompiler {
                     opacities = [["value": opacity]]
                 }
                 var fills = layer["fill-specializations"] as? [[String: Any]] ?? []
-                if fills.isEmpty, let fill = layer["fill"] {
+                // An empty or null fill-specializations list counts as absent,
+                // so the plain fill applies, with its dark rule.
+                let plainFill = fills.isEmpty && layer["fill"] != nil
+                if plainFill, let fill = layer["fill"] {
                     fills = [["value": fill]]
                 }
                 var blends = layer["blend-mode-specializations"] as? [[String: Any]] ?? []
@@ -123,7 +126,7 @@ public enum IconComposerCompiler {
                     scale: (position["scale"] as? NSNumber)?.doubleValue ?? 1,
                     translation: (translation.first ?? 0, translation.count > 1 ? translation[1] : 0),
                     fills: fills,
-                    plainFill: layer["fill-specializations"] == nil && layer["fill"] != nil,
+                    plainFill: plainFill,
                     blends: blends,
                     opacities: opacities,
                     glass: layer["glass"] as? Bool ?? true))
