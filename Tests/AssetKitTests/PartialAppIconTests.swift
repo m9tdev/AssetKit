@@ -198,6 +198,21 @@ struct PartialAppIconTests {
         #expect(bundle.looseFiles.isEmpty)
     }
 
+    /// actool 27.0 with iPhone and iPad target devices (a universal app):
+    /// CFBundleIcons~ipad gets the alternates too.
+    @Test("An empty primary set lists its alternates for iPad as well")
+    func emptySetWithAlternateIPad() async throws {
+        let catalog = try Self.catalog(slots: Self.slots(ipad: true), filled: [])
+        defer { try? FileManager.default.removeItem(at: catalog.deletingLastPathComponent()) }
+        try Self.addAlternate(to: catalog, idiom: "universal", platform: "ios", size: "1024x1024", scale: "1x")
+        let result = try await Self.compile(catalog, devices: ["iphone", "ipad"])
+        #expect(try Self.carNames(result) == ["Alt"])
+        let bundle = try #require(result.appIconBundle)
+        #expect(bundle.alternateIconNames == ["Alt"])
+        #expect(bundle.infoPlistAdditions.keys.sorted() == ["CFBundleIcons", "CFBundleIcons~ipad"])
+        #expect((bundle.infoPlistAdditions["CFBundleIcons~ipad"] as? [String: any Sendable])?.isEmpty == true)
+    }
+
     /// macOS: actool 27.0 compiles the alternate into the car but writes an
     /// empty partial plist, so there is no app icon bundle.
     @Test("macOS: an empty primary set with an alternate gives no app icon bundle")
