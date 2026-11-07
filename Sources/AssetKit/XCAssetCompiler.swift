@@ -262,11 +262,17 @@ public struct XCAssetCompiler: Sendable {
         }
         appIconBundle?.alternateIconNames = alternates.sorted()
         // An empty primary set gives no icon, but its alternates still need
-        // CFBundleAlternateIcons (actool: CFBundleIcons with only those).
+        // CFBundleAlternateIcons (actool: CFBundleIcons with only those, and
+        // CFBundleIcons~ipad too when iPad is a target device). On macosx
+        // actool writes no app icon keys at all.
         if appIconBundle == nil, !alternates.isEmpty, platform != "macosx", let primaryName {
+            var additions: [String: any Sendable] = ["CFBundleIcons": [String: any Sendable]()]
+            if targetDevices.contains("ipad") {
+                additions["CFBundleIcons~ipad"] = [String: any Sendable]()
+            }
             appIconBundle = AppIconBundle(
                 primaryIconName: primaryName, alternateIconNames: alternates.sorted(),
-                infoPlistAdditions: ["CFBundleIcons": [String: any Sendable]()], looseFiles: [])
+                infoPlistAdditions: additions, looseFiles: [])
         }
 
         let classicMac = platform == "macosx" && (iconComposer != nil || !alternateIconComposers.isEmpty)
