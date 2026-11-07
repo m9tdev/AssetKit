@@ -166,26 +166,58 @@ struct PartialAppIconTests {
         #expect(result.warnings.isEmpty)
     }
 
+    /// An `Alt.appiconset` with one 1024 pt image next to the catalog's
+    /// primary set.
+    static func addAlternate(to catalog: URL, idiom: String, platform: String?, size: String, scale: String) throws {
+        let alt = catalog.appendingPathComponent("Alt.appiconset")
+        try FileManager.default.createDirectory(at: alt, withIntermediateDirectories: true)
+        try writePNG(side: 1024, to: alt.appendingPathComponent("alt.png"))
+        let platformKey = platform.map { #""platform":"\#($0)","# } ?? ""
+        try Data(#"{"images":[{"filename":"alt.png","idiom":"\#(idiom)",\#(platformKey)"scale":"\#(scale)","size":"\#(size)"}],"info":{"author":"xcode","version":1}}"#.utf8)
+            .write(to: alt.appendingPathComponent("Contents.json"))
+    }
+
+    static func carNames(_ result: CompileResult) throws -> Set<String> {
+        Set(try CARReader(result.carData).renditionKeys.map { String($0.split(separator: "|")[0]) })
+    }
+
     /// actool 27.0 on the same catalog (iphoneos): Alt in the car, and a
     /// partial plist of CFBundleIcons.CFBundleAlternateIcons.Alt only.
     @Test("An empty primary set still lists its alternate icons")
     func emptySetWithAlternate() async throws {
         let catalog = try Self.catalog(slots: Self.slots(ipad: false), filled: [])
         defer { try? FileManager.default.removeItem(at: catalog.deletingLastPathComponent()) }
-        let alt = catalog.appendingPathComponent("Alt.appiconset")
-        try FileManager.default.createDirectory(at: alt, withIntermediateDirectories: true)
-        try Self.writePNG(side: 1024, to: alt.appendingPathComponent("alt.png"))
-        try Data(#"{"images":[{"filename":"alt.png","idiom":"universal","platform":"ios","scale":"1x","size":"1024x1024"}],"info":{"author":"xcode","version":1}}"#.utf8)
-            .write(to: alt.appendingPathComponent("Contents.json"))
+        try Self.addAlternate(to: catalog, idiom: "universal", platform: "ios", size: "1024x1024", scale: "1x")
         let result = try await Self.compile(catalog, devices: ["iphone"])
-        let names = Set(try CARReader(result.carData).renditionKeys.map { String($0.split(separator: "|")[0]) })
-        #expect(names == ["Alt"])
+        #expect(try Self.carNames(result) == ["Alt"])
         let bundle = try #require(result.appIconBundle)
         #expect(bundle.primaryIconName == "AppIcon")
         #expect(bundle.alternateIconNames == ["Alt"])
         #expect(bundle.infoPlistAdditions.keys.sorted() == ["CFBundleIcons"])
         #expect((bundle.infoPlistAdditions["CFBundleIcons"] as? [String: any Sendable])?.isEmpty == true)
         #expect(bundle.looseFiles.isEmpty)
+    }
+
+    /// macOS: actool 27.0 compiles the alternate into the car but writes an
+    /// empty partial plist, so there is no app icon bundle.
+    @Test("macOS: an empty primary set with an alternate gives no app icon bundle")
+    func macEmptySetWithAlternate() async throws {
+        let fm = FileManager.default
+        let catalog = fm.temporaryDirectory
+            .appendingPathComponent("partial-mac-\(UUID().uuidString)")
+            .appendingPathComponent("Assets.xcassets")
+        let set = catalog.appendingPathComponent("AppIcon.appiconset")
+        try fm.createDirectory(at: set, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: catalog.deletingLastPathComponent()) }
+        try Data(#"{"info":{"author":"xcode","version":1}}"#.utf8)
+            .write(to: catalog.appendingPathComponent("Contents.json"))
+        try Data(#"{"images":[{"idiom":"mac","scale":"2x","size":"512x512"}],"info":{"author":"xcode","version":1}}"#.utf8)
+            .write(to: set.appendingPathComponent("Contents.json"))
+        try Self.addAlternate(to: catalog, idiom: "mac", platform: nil, size: "512x512", scale: "2x")
+        let result = try await XCAssetCompiler(deploymentTarget: "14.0", platform: "macosx", targetDevices: ["mac"])
+            .compile(catalog: catalog, appIconName: "AppIcon")
+        #expect(try Self.carNames(result) == ["Alt"])
+        #expect(result.appIconBundle == nil)
     }
 
     @Test("A partly filled macOS set compiles its filled slots, without iOS warnings")
