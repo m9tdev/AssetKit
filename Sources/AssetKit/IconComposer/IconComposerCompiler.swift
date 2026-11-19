@@ -46,10 +46,15 @@ public enum IconComposerCompiler {
         var components: [Double]
     }
 
-    /// A resolved fill: a color, or two stop colors (vertical gradient).
+    /// A resolved fill: a color, two stop colors (vertical gradient), or
+    /// Icon Composer's automatic gradient from one color.
     enum Fill: Hashable {
         case solid(IconColor)
         case gradient(IconColor, IconColor)
+        /// `{"automatic-gradient": color}`. actool 27.2 writes it as a named
+        /// gradient with one stop (the source color); the system derives
+        /// the shading at draw time.
+        case automaticGradient(IconColor)
     }
 
     /// The three appearances actool compiles for an .icon app icon.
@@ -213,7 +218,7 @@ public enum IconComposerCompiler {
     /// iphoneos oracles): the resolved fill; else system-dark in dark, white
     /// for an icon.json without any fill, system-light for "automatic".
     static func backgroundFill(_ model: IconModel, appearance: Appearance?) -> Fill {
-        if let fill = resolveFill(model.fills, appearance: appearance) { return fill }
+        if let fill = resolveFill(model.fills, appearance: appearance, background: true) { return fill }
         if appearance == .dark { return presetFill("system-dark")! }
         return model.fills.isEmpty ? .solid(white) : presetFill("system-light")!
     }
@@ -236,13 +241,17 @@ public enum IconComposerCompiler {
 
     /// Resolves a fill for one appearance. "automatic" uses the unqualified
     /// fill (Alt1 dark stores the default white). No unqualified fill means
-    /// no overlay (IceCubes front dark).
-    static func resolveFill(_ specializations: [[String: Any]], appearance: Appearance?) -> Fill? {
+    /// no overlay (IceCubes front dark). `automatic-gradient` is read for the
+    /// background only (actool 27.2 oracle); a layer's own automatic gradient
+    /// is not checked against actool and stays unfilled, as before.
+    static func resolveFill(
+        _ specializations: [[String: Any]], appearance: Appearance?, background: Bool = false
+    ) -> Fill? {
         guard let value = specializedValue(specializations, appearance: appearance) else { return nil }
         if let name = value as? String {
             if name == "automatic" {
                 guard appearance != nil else { return nil }
-                return resolveFill(specializations, appearance: nil)
+                return resolveFill(specializations, appearance: nil, background: background)
             }
             return presetFill(name)
         }
@@ -253,6 +262,9 @@ public enum IconComposerCompiler {
         if let stops = dict["linear-gradient"] as? [String], stops.count >= 2,
            let top = parseColor(stops[0]), let bottom = parseColor(stops[1]) {
             return Fill.gradient(top, bottom)
+        }
+        if background, let color = dict["automatic-gradient"] as? String {
+            return parseColor(color).map { Fill.automaticGradient($0) }
         }
         return nil
     }
@@ -419,6 +431,10 @@ public enum IconComposerCompiler {
                 _ = colorSlot(bottom)
                 name = "\(input.name)_Assets/Gradient-\(gradientFacets.count + 1)"
                 gradientFacets.append((name, [top, bottom]))
+            case .automaticGradient(let color):
+                _ = colorSlot(color)
+                name = "\(input.name)_Assets/Gradient-\(gradientFacets.count + 1)"
+                gradientFacets.append((name, [color]))
             }
             fillNames[fill] = name
             return name
@@ -559,7 +575,7 @@ public enum IconComposerCompiler {
         for appearance in input.platform == "macosx" ? [] : appearances {
             let pixels = render(model: model, images: images, appearance: appearance)
             if appearance == nil { lightPixels = pixels }
-            let renditionTag = renditionUUIDTag()
+            let renditionTag = renditionUUIDTag(name: input.name, appearance: appearance, pixels: pixels)
             for idiom in idioms {
                 iconRenditions.append(Rendition(
                     name: input.name, idiom: idiom, scale: .x1,
@@ -698,7 +714,7 @@ public enum IconComposerCompiler {
                     width: UInt32(side), height: UInt32(side),
                     pixelsBGRA: bitmap, colorSpaceID: 1, kind: .appIcon,
                     renditionName:
-                        "\(input.name)\(size.points)x\(size.points)_NSAppearanceNameSystem_\(renditionUUIDTag()).png"))))
+                        "\(input.name)\(size.points)x\(size.points)_NSAppearanceNameSystem_\(renditionUUIDTag(name: input.name, appearance: nil, pixels: bitmap)).png"))))
             sizeEntries.append(.init(
                 pointWidth: UInt32(size.points), pointHeight: UInt32(size.points), iconIndex: UInt32(index + 1)))
         }
@@ -846,13 +862,37 @@ public enum IconComposerCompiler {
         }
     }
 
-    /// The RenditionName suffix Apple appends: a per-compile UUID, a process
-    /// id and a monotonic counter. Values differ per compile by design; the
-    /// shape matches the oracle's.
-    static func renditionUUIDTag() -> String {
-        let pid = ProcessInfo.processInfo.processIdentifier
-        let counter = UInt64(Date().timeIntervalSince1970 * 1000)
-        return "\(UUID().uuidString)-\(pid)-\(String(format: "%016llX", counter))"
+    /// The RenditionName suffix in Apple's shape: UUID, process id, 64-bit
+    /// counter. actool fills it with a fresh UUID, its pid and a clock value,
+    /// so its own cars differ per compile (IceCubes oracle runs: pids 53704
+    /// and 53930). We derive all three from the content instead, so the same
+    /// inputs give a byte-identical car. The UUID bytes keep Apple's RFC-4122
+    /// v4 shape (version nibble 4, variant 10xx): 98ff033's raw hash nibbles
+    /// and per-rendition pid are the only untested deltas against the VALID
+    /// 9f509fe car, so both now match actool's observable shape. The pid is
+    /// one value per compile in actool (it is a process id), so it is a
+    /// constant here.
+    static func renditionUUIDTag(name: String, appearance: Appearance?, pixels: [UInt8]) -> String {
+        func fnv1a(_ seed: UInt64) -> UInt64 {
+            var h: UInt64 = 0xCBF2_9CE4_8422_2325 ^ seed
+            for byte in name.utf8 { h = (h ^ UInt64(byte)) &* 0x100_0000_01B3 }
+            for byte in appearanceNameTag(appearance).utf8 { h = (h ^ UInt64(byte)) &* 0x100_0000_01B3 }
+            for byte in pixels { h = (h ^ UInt64(byte)) &* 0x100_0000_01B3 }
+            return h
+        }
+        let a = fnv1a(1), b = fnv1a(2), c = fnv1a(3)
+        var bytes = [UInt8]()
+        for value in [a, b] {
+            for shift in stride(from: 56, through: 0, by: -8) {
+                bytes.append(UInt8(truncatingIfNeeded: value >> UInt64(shift)))
+            }
+        }
+        bytes[6] = (bytes[6] & 0x0F) | 0x40
+        bytes[8] = (bytes[8] & 0x3F) | 0x80
+        let hex = bytes.map { String(format: "%02X", $0) }.joined()
+        let chars = Array(hex)
+        let uuid = [0..<8, 8..<12, 12..<16, 16..<20, 20..<32].map { String(chars[$0]) }.joined(separator: "-")
+        return "\(uuid)-\(53_704)-\(String(format: "%016llX", c >> 8))"
     }
 
     /// Premultiplied BGRA bytes for a decoded layer image (PNGSource's

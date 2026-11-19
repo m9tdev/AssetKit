@@ -16,10 +16,18 @@ public struct CompileResult: Sendable {
     /// catalog contained exactly one `.appiconset`.
     public var appIconBundle: AppIconBundle?
 
-    public init(carData: Data, renditionCount: Int, appIconBundle: AppIconBundle? = nil) {
+    /// Warnings about the catalog that don't stop the compile, for example an
+    /// asset whose renditions share a rendition key.
+    public var warnings: [CompileWarning]
+
+    public init(
+        carData: Data, renditionCount: Int, appIconBundle: AppIconBundle? = nil,
+        warnings: [CompileWarning] = []
+    ) {
         self.carData = carData
         self.renditionCount = renditionCount
         self.appIconBundle = appIconBundle
+        self.warnings = warnings
     }
 }
 
@@ -165,9 +173,13 @@ public struct XCAssetCompiler: Sendable {
         for colorSet in loaded.colorSets {
             renditions.append(contentsOf: try ColorRenderer.renditions(for: colorSet))
         }
+        // Sequential on purpose: sprite rasterization feeds the atlas shelf
+        // order, which is part of the byte-stable output.
+        var preparedSymbols: [SymbolRenderer.PreparedSymbolSet] = []
         for symbolSet in loaded.symbolSets {
-            renditions.append(contentsOf: try SymbolRenderer.renditions(for: symbolSet, svgRasterizer: svgRasterizer))
+            preparedSymbols.append(try SymbolRenderer.prepare(for: symbolSet, svgRasterizer: svgRasterizer))
         }
+        renditions.append(contentsOf: SymbolRenderer.renditions(for: preparedSymbols))
 
         var appIconBundle: AppIconBundle?
         if let iconComposer {
@@ -248,8 +260,10 @@ public struct XCAssetCompiler: Sendable {
             deploymentTarget: deploymentTarget, renditions: renditions,
             macSchema: platform == "macosx" && !classicMac,
             classicMacSchema: classicMac)
-        let bytes = try writer.write()
+        let car = try writer.compile()
 
-        return CompileResult(carData: bytes, renditionCount: renditions.count, appIconBundle: appIconBundle)
+        return CompileResult(
+            carData: car.data, renditionCount: renditions.count, appIconBundle: appIconBundle,
+            warnings: car.warnings)
     }
 }

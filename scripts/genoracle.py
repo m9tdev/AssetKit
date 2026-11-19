@@ -53,7 +53,7 @@ class BOM:
         node = self.block(child)
         # descend to the leftmost leaf
         while struct.unpack(">H", node[0:2])[0] == 0:
-            child = struct.unpack(">I", node[12 + 4:12 + 8])[0] if False else struct.unpack(">I", node[12:16])[0]
+            child = struct.unpack(">I", node[12:16])[0]
             node = self.block(child)
         while True:
             is_leaf, count, fwd, _ = struct.unpack(">HHII", node[:12])

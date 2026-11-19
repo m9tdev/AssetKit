@@ -4,7 +4,7 @@ import Testing
 import PNG
 
 /// The classic macOS layout actool 27.0 writes for `--platform macosx`
-/// (oracle: the OpenDisplay `.icon`, alone, with an imageset and a colorset,
+/// (oracle: a real-world `.icon`, alone, with an imageset and a colorset,
 /// and with a symbolset).
 @Suite("Classic macOS schema")
 struct ClassicMacSchemaTests {
@@ -99,7 +99,9 @@ struct ClassicMacSchemaTests {
             Self.image("Pic", idiom: .mac, scale: .x2),
         ])
         writer.classicMacSchema = true
-        _ = try writer.write()
+        let car = try writer.compile()
+        #expect(car.data == (try writer.write()))
+        #expect(car.warnings.map(\.path) == ["Pic"])
     }
 
     @Test("P3 variants add displayGamut (key slot and BITMAPKEYS value 3)")
