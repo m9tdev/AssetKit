@@ -82,7 +82,7 @@ let canonicalKeyOrder: [AttributeID] = [
 /// The classic macOS key order (keySemantics 1). actool 27.0 compiles every
 /// `--platform macosx` catalog in it: [7, 13, 1, 2, 3, 17, 9, 11, 12], with
 /// dimension2 only when an app icon carries Icon Indexes or a symbol its
-/// Glyph Cached Index (oracle: the OpenDisplay `.icon`, alone and with an
+/// Glyph Cached Index (oracle: a real-world `.icon`, alone and with an
 /// imageset and a colorset; a plain macosx catalog drops dimension2). No
 /// idiom or subtype slot. Symbols append deploymentTarget, glyphWeight and
 /// glyphSize after scale (oracle: a symbolset, alone and with the `.icon`:

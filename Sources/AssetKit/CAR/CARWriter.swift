@@ -36,6 +36,12 @@ struct CARWriter: Sendable {
     var classicMacSchema = false
 
     func write() throws -> Data {
+        try compile().data
+    }
+
+    /// The car's bytes, and the warnings about the renditions (assets whose
+    /// renditions share a rendition key).
+    func compile() throws -> (data: Data, warnings: [CompileWarning]) {
         var bom = BOMWriter()
 
         let layout = CARLayout(renditions: renditions)
@@ -52,9 +58,9 @@ struct CARWriter: Sendable {
         let renditionData: [(key: Data, value: Data)] = renditions.map { rendition in
             (renditionKey(rendition).encode(format: keyFormat), csiData(for: rendition))
         }
-        for asset in Self.duplicateKeyAssets(renditions.map(\.name), keys: renditionData.map(\.key)) {
-            FileHandle.standardError.write(Data(
-                "warning: asset '\(asset)' has renditions with the same rendition key; CoreUI resolves only one of them\n".utf8))
+        let warnings = Self.duplicateKeyAssets(renditions.map(\.name), keys: renditionData.map(\.key)).map {
+            CompileWarning(
+                path: $0, message: "The asset has renditions with the same rendition key; CoreUI resolves only one of them")
         }
         let facetData: [(key: Data, value: Data)] = layout.assets
             .map { asset in (Data(asset.name.utf8), FacetKeys.value(for: asset.name, kind: facetKind(asset))) }
@@ -228,7 +234,7 @@ struct CARWriter: Sendable {
             bom.setVariable("BITMAPKEYS", blockID: bitmapTreeHeaderID)
         }
 
-        return bom.finalize()
+        return (bom.finalize(), warnings)
     }
 
     /// Names of the assets that have two renditions with the same key. AssetKit
@@ -265,7 +271,6 @@ struct CARWriter: Sendable {
     /// BITMAPKEYS entries: inline u32 key = NameIdentifier (big-endian 4
     /// bytes), value = the descriptor. iOS: color-only assets produce no
     /// row. Classic macOS: every facet has a row.
-
     private func bitmapEntries(layout: CARLayout, keyFormat: [AttributeID]) -> [(key: Data, value: Data)] {
         if classicMacSchema {
             return layout.assets.map { asset in

@@ -28,7 +28,7 @@ enum AppearanceKeys {
     static let tintable: UInt16 = 10
     /// macOS light appearance ("NSAppearanceNameAqua"). A classic macOS car
     /// keys light Icon Composer renditions at 8 where iOS uses 4 (actool
-    /// 27.0 macosx oracle, OpenDisplay `.icon`).
+    /// 27.0 macosx oracle, a real-world `.icon`).
     static let aqua: UInt16 = 8
 
     /// macOS APPEARANCEKEYS rows: NSAppearanceNameSystem (0) is the default,
